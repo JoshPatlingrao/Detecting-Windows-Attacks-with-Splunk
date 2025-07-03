@@ -69,3 +69,93 @@ Detecting User/Domain Recon With Splunk
     - Highlights suspicious parent processes spawning multiple child processes.
 
 Detecting Recon By Targeting BloodHound
+- index=main earliest=1690195896 latest=1690285475 source="WinEventLog:SilkService-Log" | spath input=Message | rename XmlEventData.* as * | table _time, ComputerName, ProcessName, ProcessId, DistinguishedName, SearchFilter | sort 0 _time | search SearchFilter="*(samAccountType=805306368)*" | stats min(_time) as _time, max(_time) as maxTime, count, values(SearchFilter) as SearchFilter by ComputerName, ProcessName, ProcessId | where count > 10 | convert ctime(maxTime)
+- Breakdown
+  - Filtering by Index and Source:
+    - Searches the main index.
+    - Filters for logs with source: WinEventLog:SilkService-Log (from SilkETW).
+  - Time Range Filter:
+    - Filters events between Unix timestamps 1690195896 and 1690285475.
+  - Path Extraction:
+    - Uses spath to extract fields from the Message field (likely structured as JSON or XML).
+  - Field Renaming:
+    - Uses rename to strip XmlEventData. prefix from field names for simplicity.
+  - Tabulating Results:
+    - Uses table to display selected columns: _time, ComputerName, ProcessName, ProcessId, DistinguishedName, SearchFilter
+  - Sorting:
+    - Uses sort 0 _time to sort all results by _time (ascending).
+    - 0 means no limit on the number of results sorted.
+  - Search Filter:
+    - Filters events where SearchFilter contains: *(samAccountType=805306368)*
+      - (likely targeting LDAP queries for user accounts).
+  - Statistics:
+    - Groups events by: ComputerName, ProcessName, ProcessId
+    - Each group, calculates:
+      - min(_time) as _time → First occurrence.
+      - max(_time) as maxTime → Last occurrence.
+      - count → Number of events in the group.
+      - values(SearchFilter) → Unique search filters used.
+  - Filtering by Event Count:
+    - Uses where to filter groups with count > 10.
+    - Focuses on processes that ran >10 LDAP searches with the target filter.
+  - Time Conversion
+    - Uses convert to change maxTime from Unix timestamp to human-readable ctime format.
+### Walkthrough
+Q1. Modify and employ the Splunk search provided at the end of this section on all ingested data (All time) to find all process names that made LDAP queries where the filter includes the string *(samAccountType=805306368)*. Enter the missing process name from the following list as your answer. N/A, Rubeus, SharpHound, mmc, powershell, _
+- Open Splunk in Firefox and go to 'Search' tab
+- Run the Splunk query in the (Detecting Recon By Targeting BloodHound) section and set time range to 'All Time'
+- Modify the query
+  - Remove the time range: earliest=1690195896 latest=1690285475
+    - This is to go through all LDAP query events, not just in a specific time range
+  - Change the count from 'where count > 10' to 'where count > 1'
+    - This ensures that it will list all processes that made LDAP queries at least once.
+- Answer is: rundll32
+
+## Password Spraying
+### Notes
+Password Spraying
+- Spreads out the attack across multiple accounts using a limited set of commonly used or easily guessable passwords
+  - Want to evade account lockout policies
+    - Applied to defend against brute-force attacks on individual accounts
+- Lowers the chance of triggering account lockouts
+  - Each user account receives only a few password attempts
+  - Attack is less noticeable.
+
+Password Spraying Detection Opportunities
+- Done in Windows
+- Look for multiple failed logons: Event ID 4625 - Failed Logon
+  - From multiple accounts but comes from same source IP.
+  - Within short time frame
+- Other useful event logs:
+  - 4768 and ErrorCode 0x6 - Kerberos Invalid Users
+  - 4768 and ErrorCode 0x12 - Kerberos Disabled Users
+  - 4776 and ErrorCode 0xC000006A - NTLM Invalid Users
+  - 4776 and ErrorCode 0xC0000064 - NTLM Wrong Password
+  - 4648 - Authenticate Using Explicit Credentials
+  - 4771 - Kerberos Pre-Authentication Failed
+
+Detecting Password Spraying With Splunk
+- index=main earliest=1690280680 latest=1690289489 source="WinEventLog:Security" EventCode=4625 | bin span=15m _time | stats values(user) as Users, dc(user) as dc_user by src, Source_Network_Address, dest, EventCode, Failure_Reason
+- Breakdown
+  - Filtering by Index, Source, and EventCode:
+    - Filters events from index=main
+    - Source is WinEventLog:Security
+    - EventCode is 4625 (represents failed Windows logon attempts)
+  - Time Range Filter:
+    - Limits events to those between Unix timestamps 1690280680 and 1690289489
+  - Time Binning:
+    - Uses the bin command to group events into 15-minute intervals (_time)
+    - Helps identify trends or patterns over time
+  - Statistical Aggregation (stats command):
+    - Groups events by: src (source host), Source_Network_Address, dest (destination), EventCode, Failure_Reason
+    - Calculates:
+      - values(user) as Users: Lists all unique users involved in each group
+      - dc(user) as dc_user: Counts the number of distinct users per group
+
+### Walkthrough
+Q1. Employ the Splunk search provided at the end of this section on all ingested data (All time) and enter the targeted user on SQLSERVER.corp.local as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Remove the time range: earliest=1690280680 latest=1690289489
+  - It will show all destination domains that are effected, even SQLSERVER.corp.local which will only have 1 user affected
+- Answer is: sa
