@@ -156,6 +156,60 @@ Detecting Password Spraying With Splunk
 Q1. Employ the Splunk search provided at the end of this section on all ingested data (All time) and enter the targeted user on SQLSERVER.corp.local as your answer.
 - Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
   - http://IPADDRESS:8000
-- Remove the time range: earliest=1690280680 latest=1690289489
-  - It will show all destination domains that are effected, even SQLSERVER.corp.local which will only have 1 user affected
+- Modify the query:
+  - Remove the time range: earliest=1690280680 latest=1690289489
+    - It will remove the time range and query for all failed login events
+  - Add the destination to the specified domain after the EventCode
+    - dest="SQLSERVER.corp.local"
 - Answer is: sa
+
+## Detecting Responder-Like Attacks
+### Notes
+LLMNR/NBT-NS/mDNS Poisoning
+- Vocab
+  - LLMNR (Link-Local Multicast Name Resolution)
+  - NBT-NS (NetBIOS Name Service)
+- Network-level attacks that exploit inefficiencies in these name resolution protocols.
+- LLMNR and NBT-NS are used to resolve hostnames to IP addresses on local networks when the fully qualified domain name (FQDN) resolution fails
+  - No built-in security features. Very susceptible to spoofing and poisoning attacks
+    - Attackers use Responder tool to execute the attack
+      - https://github.com/lgandx/Responder
+
+Attack Steps
+- Victim device sends a name resolution query for a mistyped hostname
+- DNS fails to resolve the mistyped hostname
+- Victim device sends a name resolution query for the mistyped hostname using LLMNR/NBT-NS
+- Attacker's host responds to the query and pretends to know the identity of the requested host
+  - LLMNR (UDP 5355)
+  - NBT-NS (UDP 137)
+- Victim device is redirected to adversary-controlled system
+
+Responder Detection Opportunities
+- Detection is diffult for this attack
+- Deploy network monitoring solutions to detect unusual LLMNR and NBT-NS traffic patterns, such as an elevated volume of name resolution requests from a single source.
+- Employ a honeypot approach - name resolution for non-existent hosts should fail. If an attacker is present and spoofing LLMNR/NBT-NS/mDNS responses, name resolution will succeed.
+  - https://www.praetorian.com/blog/a-simple-and-effective-way-to-detect-broadcast-name-resolution-poisoning-bnrp/
+
+Detecting Responder-like Attacks With Splunk
+- Options:
+  - index=main earliest=1690290078 latest=1690291207 SourceName=LLMNRDetection | table _time, ComputerName, SourceName, Message
+    - This one focuses on the LLMNRDetection as an event provider
+  - index=main earliest=1690290078 latest=1690291207 EventCode=22 | table _time, Computer, user, Image, QueryName, QueryResults
+    - Can use Sysmon Event ID 22 to track DNS queries on non-existent/mistyped file shares
+  - index=main earliest=1690290814 latest=1690291207 EventCode IN (4648) | table _time, EventCode, source, name, user, Target_Server_Name, Message | sort 0 _time
+    - Can also use Event 4648, used to detect explicit logons to rogue file shares which attackers might use to gather legitimate user credentials
+
+### Walkthrough
+Q1. Modify and employ the provided Sysmon Event 22-based Splunk search on all ingested data (All time) to identify all share names whose location was spoofed by 10.10.0.221. Enter the missing share name from the following list as your answer. myshare, myfileshar3, _
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Run the EventCode=22 version of the query
+- Scroll and observe the myshare and myfileshar3 events
+  - Both share the QueryResults having the value '::1;::ffff:10.10.0.221;' which is the attacker machine spoofing these share names
+- Modify the query:
+  - Remove the time range: earliest=1690280680 latest=1690289489
+    - It will remove the time range and query for all failed login events
+  - Add the QueryResults that indicate the spoofing
+    - QueryResults="::1;::ffff:10.10.0.221;"
+- Run the query and it will show the 3 share names that have been spoofed by 10.10.0.221
+- Answer is: f1nancefileshare
