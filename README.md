@@ -213,3 +213,42 @@ Q1. Modify and employ the provided Sysmon Event 22-based Splunk search on all in
     - QueryResults="::1;::ffff:10.10.0.221;"
 - Run the query and it will show the 3 share names that have been spoofed by 10.10.0.221
 - Answer is: f1nancefileshare
+
+## Detecting Kerberoasting/AS-REProasting
+### Notes
+Kerberoasting
+- A technique targeting service accounts in AD environments to extract and crack their password hashes
+- It exploits Kerberos service tickets encryption and usage of weak or easily crackable passwords for service accounts
+
+Attack Steps
+- Identify Target Service Accounts:
+  - Attacker searches for service accounts in AD
+  - Enumerates accounts with Service Principal Names (SPNs) set
+  - Why:
+    - SPNs are linked to services like SQL Server, Exchange, or custom apps.
+    - Service accounts often have elevated privileges.
+  - Attackers may use tools like Rubeus to automate SPN enumeration
+- Request TGS Ticket:
+  - Attacker requests TGS (Ticket Granting Service) tickets for service accounts, from Key Distribution Center (KDC).
+  - TGS tickets contain encrypted password hashes of the targeted service accounts.
+    - This will be brute-forced offline
+  - Rubeus is used to automate the TGS ticket requests.
+- Offline Brute-Force Attack:
+  - Attacker runs offline brute-force techniques, using password cracking tools like Hashcat or John the Ripper, to attempt to crack the encrypted password hashes.
+
+Benign Service Access Process & Related Events
+- Rehash of Kerberos operations and tickets
+- Related Events:
+  - Event ID 4768 (Kerberos TGT Request):
+    - Triggered when a client requests a TGT from the KDC
+    - Logged on the domain controller in the Security log.
+  - Event ID 4769 (Kerberos Service Ticket Request):
+    - Occurs when the client uses the TGT to request a TGS ticket for a service (e.g., MSSQL server’s SPN).
+    - Also logged on the domain controller.
+  - Event ID 4624 (Logon):
+    - Logged on the target server (e.g., MSSQL server) after the client uses the TGS to authenticate and successfully log in.
+    - Indicates successful connection using the service account tied to the SPN.
+
+Kerberoasting Detection Opportunities
+- Done during recon phase for privileged service accounts, look for LDAP activity
+  - 
