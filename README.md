@@ -251,4 +251,65 @@ Benign Service Access Process & Related Events
 
 Kerberoasting Detection Opportunities
 - Done during recon phase for privileged service accounts, look for LDAP activity
+- Legitimate vs Kerberoasting: TGS tickets are requested, but legitimate user will connect to the server and present the TGS ticket
+  - Attacker takes the TGS ticket to break encryption and steal credentials.
+
+Detecting Kerberoasting With Splunk
+- Benign TGS Request
+  - index=main earliest=1690388417 latest=1690388630 EventCode=4648 OR (EventCode=4769 AND service_name=iis_svc) | dedup RecordNumber | rex field=user "(?<username>[^@]+)" | table _time, ComputerName, EventCode, name, username, Account_Name, Account_Domain, src_ip, service_name, Ticket_Options, Ticket_Encryption_Type, Target_Server_Name, Additional_Information
+  - Breakdown
+    - index=main earliest=1690388417 latest=1690388630
+      - Limits the search to the main index.
+      - Filters events that occurred between the given epoch timestamps (specific time range).
+    - EventCode=4648 OR (EventCode=4769 AND service_name=iis_svc)
+      - Includes events with: EventCode=4648, or EventCode=4769 only if the service_name is iis_svc.
+    - | dedup RecordNumber
+      - Removes duplicate events using the RecordNumber field to ensure unique records.
+    - | rex field=user "(?<username>[^@]+)"
+      - Uses regular expression to extract the username from the user field (removes domain part after @).
+      - Stores the result in a new field called username.
+    - | table _time, ComputerName, EventCode, name, username, Account_Name, Account_Domain, src_ip, service_name, Ticket_Options, Ticket_Encryption_Type, Target_Server_Name, Additional_Information
+      - Formats the output as a table displaying only the listed fields for readability and analysis.
+- Detecting Kerberoasting - SPN Querying
+  - index=main earliest=1690448444 latest=1690454437 source="WinEventLog:SilkService-Log" | spath input=Message | rename XmlEventData.* as * | table _time, ComputerName, ProcessName, DistinguishedName, SearchFilter | search SearchFilter="*(&(samAccountType=805306368)(servicePrincipalName=*)*"
+- Detecting Kerberoasting - TGS Requests
+  - index=main earliest=1690450374 latest=1690450483 EventCode=4648 OR (EventCode=4769 AND service_name=iis_svc) | dedup RecordNumber | rex field=user "(?<username>[^@]+)" | bin span=2m _time | search username!=*$ | stats values(EventCode) as Events, values(service_name) as service_name, values(Additional_Information) as Additional_Information, values(Target_Server_Name) as Target_Server_Name by _time, username | where !match(Events,"4648")
+- Detecting Kerberoasting Using Transactions - TGS Requests
+  - index=main earliest=1690450374 latest=1690450483 EventCode=4648 OR (EventCode=4769 AND service_name=iis_svc) | dedup RecordNumber | rex field=user "(?<username>[^@]+)" | search username!=*$ | transaction username keepevicted=true maxspan=5s endswith=(EventCode=4648) startswith=(EventCode=4769) | where closed_txn=0 AND EventCode = 4769 | table _time, EventCode, service_name, username
+
+AS-REPRoasting
+- A technique used in Active Directory environments to target user accounts without pre-authentication enabled
+- Pre-Auth in Kerberos is a security feature, users must prove their identity before TGT is issued
+
+Attack Steps:
+- Identify Target User Accounts: Attacker identifies user accounts without pre-authentication enabled.
+- Request AS-REQ Service Tickets: The attacker initiates an AS-REQ service ticket request for each identified target user account.
+- Offline Brute-Force Attack: The attacker captures the encrypted TGTs and employs offline brute-force techniques to attempt to crack the password hashes.
+
+Kerberos Pre-Auth
+- When a user tries to access a network resource or service, the client sends an authentication request AS-REQ to the KDC
+- If pre-auth is enabled, this request also contains an encrypted timestamp (pA-ENC-TIMESTAMP)
+  - KDC attempts to decrypt this timestamp using the user password hash and, if successful, issues a TGT to the user.
+- If pre-auth is disabled, there is no timestamp validation by the KDC, allowing users to request a TGT ticket without knowing the user password.
+
+AS-REPRoasting Detection Opportunities
+- Monitor LDAP activity during reocn phase for service accounts
+- Kerberos authentication Event ID 4768 (TGT Request) contains a PreAuthType attribute in the additional information part of the event indicating whether pre-authentication is enabled for an account
+
+Detecting AS-REPRoasting With Splunk
+- Detecting AS-REPRoasting - Querying Accounts With Pre-Auth Disabled
+  - index=main earliest=1690392745 latest=1690393283 source="WinEventLog:SilkService-Log" | spath input=Message | rename XmlEventData.* as * | table _time, ComputerName, ProcessName, DistinguishedName, SearchFilter | search SearchFilter="*(samAccountType=805306368)(userAccountControl:1.2.840.113556.1.4.803:=4194304)*"
+- Detecting AS-REPRoasting - TGT Requests For Accounts With Pre-Auth Disabled
+  - index=main earliest=1690392745 latest=1690393283 source="WinEventLog:Security" EventCode=4768 Pre_Authentication_Type=0 | rex field=src_ip "(\:\:ffff\:)?(?<src_ip>[0-9\.]+)" | table _time, src_ip, user, Pre_Authentication_Type, Ticket_Options, Ticket_Encryption_Type
+
+### Walkthrough
+Q1. Modify and employ the Splunk search provided at the "Detecting Kerberoasting - SPN Querying" part of this section on all ingested data (All time). Enter the name of the user who initiated the process that executed an LDAP query containing the "*(&(samAccountType=805306368)(servicePrincipalName=*)*" string at 2023-07-26 16:42:44 as your answer. Answer format: CORP\_
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Run the specified query
+- Modify the query:
+  - Remove the time range: earliest=1690280680 latest=1690289489
+    - It will remove the time range and query for all LDAP events
+    - This will also show relevant events on the same time and date
   - 
+- Answer is: CORP\LANDON_HINES
