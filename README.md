@@ -313,3 +313,160 @@ Q1. Modify and employ the Splunk search provided at the "Detecting Kerberoasting
     - This will also show relevant events on the same time and date
   - 
 - Answer is: CORP\LANDON_HINES
+
+## Detecting Pass the Hash
+### Notes
+Pass-the-Hash
+- A technique utilized by attackers to authenticate to a networked system using the NTLM hash of a user's password instead of the plaintext password
+- Takes advantage on how Windows stores password hashes in memory.
+  - If attacker has Admin privileges, they can capture the hash and reuse for lateral movement
+
+Attack Steps
+- Attacker uses tools such as Mimikatz to extract the NTLM hash of a user currently logged in the compromised system. Local admin privileges are required on the system to extract the user's hash.
+- Attacker can then authenticate as the targeted user on other systems or network resources without needing to know the actual password
+- Attacker can use the authenticated session, moving laterally within the network, gaining unauthorized access to other systems and resources
+
+Windows Access Tokens & Alternate Credentials
+- Access Token: a data structure that defines the security context of a process or thread
+  - Contains info about the associated user account's identity and privileges
+  - References a LogonSession generated at user logon
+    - LogonSession contains Username, Domain, and AuthenticationID (NTHash/LMHash), which are used when a process attempts to access remote resources
+- When user logs on, the system verifies the user's password by comparing it with information stored in a security database
+  - Once auth is confirmed, access token is generated
+  - Any process executed by this user also has a copy of the access token.
+    - https://learn.microsoft.com/en-us/windows/win32/secauthz/access-tokens
+- Alt Credentials: provides a way to supply different login credentials for specific actions or processes without altering the user's primary login session
+  - It allows a user/process to execute certain commands or access resources as a different user without logging out or switching user accounts
+  - The command 'runas' allows this.
+    - This also generates a new access token, verified by 'whoami' command
+    - Also contains '/netonly' flag, which indicates that user information for it are remote access only
+  - The 'whoami' command returns the original credentials, but the created processes through 'runas' will have privileges of the 'mask' user account
+
+Pass-the-Hash Detection Opportunities
+- 'runas' comand execution
+  - When runas command is executed without the /netonly flag - Event ID 4624 (Logon) with LogonType 2 (interactive).
+  - When runas command is executed with the /netonly flag - Event ID 4624 (Logon) with LogonType 9 (NewCredentials).
+    - False Positives could occur
+    - True Positives has Mimikatz access the LSASS process memory to change LogonSession credential materials
+      - Relate the events to 'User Logon with NewCredentials' events with 'Sysmon Process Access Event Code 10'.
+
+Detecting Pass-the-Hash With Splunk
+- index=main earliest=1690450689 latest=1690451116 (source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=10 TargetImage="C:\\Windows\\system32\\lsass.exe" SourceImage!="C:\\ProgramData\\Microsoft\\Windows Defender\\platform\\*\\MsMpEng.exe") OR (source="WinEventLog:Security" EventCode=4624 Logon_Type=9 Logon_Process=seclogo) | sort _time, RecordNumber | transaction host maxspan=1m endswith=(EventCode=4624) startswith=(EventCode=10) | stats count by _time, Computer, SourceImage, SourceProcessId, Network_Account_Domain, Network_Account_Name, Logon_Type, Logon_Process | fields - count
+- Breakdown:
+  - index=main earliest=1690450689 latest=1690451116:
+    - Limits the search to the main index.
+    - Time range specified by epoch timestamps (earliest=1690450689 latest=1690451116).
+  - (source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=10 TargetImage="C:\\Windows\\system32\\lsass.exe" SourceImage!="C:\\ProgramData\\Microsoft\\Windows Defender\\platform\\*\\MsMpEng.exe"):
+    - Source: XmlWinEventLog:Microsoft-Windows-Sysmon/Operational
+    - TargetImage: lsass.exe (indicates process access to LSASS).
+    - Excludes: Defender process (MsMpEng.exe) as a SourceImage.
+  - OR (source="WinEventLog:Security" EventCode=4624 Logon_Type=9 Logon_Process=seclogo):
+    - Source: WinEventLog:Security
+    - Logon_Type = 9 (NewCredentials)
+    - Logon_Process = seclogo (typical for remote logons via runas or remote tools).
+  - | sort _time, RecordNumber:
+    - Sorts by _time and RecordNumber for chronological analysis.
+  - | transaction host maxspan=1m endswith=(EventCode=4624) startswith=(EventCode=10):
+    - transaction command groups events on the same host within 1 minute.
+    - Starts with Sysmon EventCode=10 and ends with Security EventCode=4624.
+    - Links potential LSASS access to a remote logon event.
+  - | stats count by _time, Computer, SourceImage, SourceProcessId, Network_Account_Domain, Network_Account_Name, Logon_Type, Logon_Process:
+    - stats count by several fields to show event combinations and activity context.
+  - | fields - count:
+    - Removes the count field from the results.
+
+### Walkthrough
+Q1. A Pass-the-Hash attack took place during the following timeframe earliest=1690543380 latest=1690545180. Enter the involved ComputerName as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Modify the time range of the query as specified by the question
+- Answer is: BLUE.corp.local
+
+## Detecting Pass-the-Ticket
+### Notes
+Pass-the-Ticket (PtT)
+- A lateral movement technique on a network by abusing Kerberos TGT and TGS tickets
+- It leverages Kerberos tickets to authenticate to other systems and access network resources without needing to know the users' passwords
+
+Attack Steps
+- Attacker gains admin access to a system, either through an initial compromise or privilege escalation
+- Uses tools such as Mimikatz or Rubeus to extract valid TGT or TGS tickets from the compromised system's memory
+- Submits the extracted ticket for the current logon session
+- Attacker can now authenticate to other systems and network resources without needing plaintext passwords
+
+Related Windows Security Events
+- Event ID 4648 (Explicit Credential Logon Attempt): This event is logged when explicit credentials (e.g., username and password) are provided during logon.
+- Event ID 4624 (Logon): This event indicates that a user has successfully logged on to the system.
+- Event ID 4672 (Special Logon): This event is logged when a user's logon includes special privileges, such as running applications as an administrator.
+- Event ID 4768 (Kerberos TGT Request): This event is logged when a client requests a Ticket Granting Ticket (TGT) during the Kerberos authentication process.
+- Event ID 4769 (Kerberos Service Ticket Request): When a client requests a Service Ticket (TGS Ticket) to access a remote service during the Kerberos authentication process, Event ID 4769 is generated.
+
+Pass-the-Ticket Detection Opportunities
+- Difficult, attackers are leveraging valid Kerberos tickets instead of traditional credential hashes
+  - The gievaway is that Kerberos Authentication process will be partial
+  - Attacker imports a used TGT to a logon session and requests for a TGS, but imported TGT never had an initial request for it from the attacker, so no associated Event ID 4768
+- Look for Event ID 4769 (Kerberos Service Ticket Request) or Event ID 4770 (Kerberos Service Ticket was renewed) without a prior Event ID 4768 (Kerberos TGT Request) from the same system within a specific time window.
+- Look for mismatches between Service and Host IDs (in Event ID 4769) and the actual Source and Destination IPs (in Event ID 3)
+  - False positives are possible, but unusual names should be investigated
+- When a TGS ticket is imported, review Event ID 4771 (Kerberos Pre-Authentication Failed) for mismatches between Pre-Authentication type and Failure Code
+- Apply these with behavior-based detection to minimize False Positives
+
+Detecting Pass-the-Ticket With Splunk
+- index=main earliest=1690392405 latest=1690451745 source="WinEventLog:Security" user!=*$ EventCode IN (4768,4769,4770) | rex field=user "(?<username>[^@]+)" | rex field=src_ip "(\:\:ffff\:)?(?<src_ip_4>[0-9\.]+)" | transaction username, src_ip_4 maxspan=10h keepevicted=true startswith=(EventCode=4768) | where closed_txn=0 | search NOT user="*$@*" | table _time, ComputerName, username, src_ip_4, service_name, category
+- Breakdown
+  - index=m0ain earliest=1690392405 latest=1690451745 source="WinEventLog:Security" user!=*$ EventCode IN (4768,4769,4770):
+    - Searches the main index within the specified time range.
+    - Limits to events from WinEventLog:Security.
+    - Filters:
+      - EventCode must be one of 4768, 4769, or 4770 (Kerberos authentication-related).
+      - Excludes machine accounts by filtering out users ending in $ (user!=*$).
+  - | rex field=user "(?<username>[^@]+)":
+    - Extracts username from the user field (everything before @).
+  - | rex field=src_ip "(\:\:ffff\:)?(?<src_ip_4>[0-9\.]+)":
+    - Extracts IPv4 address (src_ip_4) from src_ip, even if stored in IPv6-mapped format.
+  - | transaction username, src_ip_4 maxspan=10h keepevicted=true startswith=(EventCode=4768):
+    - Groups events by username and src_ip_4.
+    - Each transaction starts with EventCode=4768 (Kerberos TGT request).
+    - Maximum transaction span is 10 hours.
+    - keepevicted=true: includes incomplete transactions.
+  - | where closed_txn=0:
+    - Keeps only open transactions (no ending event), possibly indicating incomplete or anomalous authentication sequences.
+  - | search NOT user="*$@*":
+    - Removes users matching the pattern *$@* (likely malformed or irrelevant usernames).
+  - | table _time, ComputerName, username, src_ip_4, service_name, category:
+    - Displays selected fields in a table: _time, ComputerName, username, src_ip_4, service_name, and category.
+
+### Walkthrough
+Q1. Execute the Splunk search provided at the end of this section to find all usernames that may be have executed a Pass-the-Ticket attack. Enter the missing username from the following list as your answer. Administrator, _
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Run the query
+- Answer is: YOUNG_WILKINSON
+
+## Detecting Overpass-the-Hash
+### Notes
+Detecting Overpass-the-Hash
+- Allows authentication to occur via Kerberos rather than NTLM. Both NTLM hashes or AES keys can serve as a basis for requesting a Kerberos TGT
+
+Attack Steps
+- Attacker uses tools such as Mimikatz to extract the NTLM hash of a user who is currently logged in to the compromised system.
+  - Must have at least local administrator privileges on the system to be able to extract the hash of the user
+- Use a tool such as Rubeus to craft a raw AS-REQ request for a specified user to request a TGT ticket
+  - Doesn't require elevated privileges on the host to request the TGT, stealthier than Mimikatz Pass the Hash attack
+- Analogous to the Pass-the-Ticket technique, the attacker submits the requested ticket for the current logon session
+
+Overpass-the-Hash Detection Opportunities
+- For Mimikatz, it has same artifacts as Pass the Hash attack, can be detected using the same strategies.
+- For Rubeus, the previous strategy only works if the requested TGT is used on another host
+  - Rubeus sends an AS-REQ request directly to the Domain Controller (DC), generating Event ID 4768 (Kerberos TGT Request)
+  - Communication with the DC (TCP/UDP port 88) from an unusual process can serve as an indicator of a potential Overpass-the-Hash attack
+
+Detecting Overpass-the-Hash With Splunk (Targeting Rubeus)
+- index=main earliest=1690443407 latest=1690443544 source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" (EventCode=3 dest_port=88 Image!=*lsass.exe) OR EventCode=1 | eventstats values(process) as process by process_id | where EventCode=3 | stats count by _time, Computer, dest_ip, dest_port, Image, process | fields - count
+
+### Walkthrough
+Q1. Employ the Splunk search provided at the end of this section on all ingested data (All time) to find all involved images (Image field). Enter the missing image name from the following list as your answer. Rubeus.exe, _.exe
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Modify the specified query and remove the time range to query for all events
+- Answer is: rundll32.exe
