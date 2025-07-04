@@ -470,3 +470,75 @@ Q1. Employ the Splunk search provided at the end of this section on all ingested
   - http://IPADDRESS:8000
 - Modify the specified query and remove the time range to query for all events
 - Answer is: rundll32.exe
+
+## Detecting Golden Tickets/Silver Tickets
+### Notes
+Golden Ticket
+- Attacker forges a TGT to gain unauthorized access to a Windows Active Directory domain as a domain administrator
+  - TGT has arbitrary credentials, but is used to pretend as a domain admin
+- Stealthy and persistent
+  - Forged ticket has a long validity period
+
+Attack Steps
+- Attacker extracts the NTLM hash of the KRBTGT account using a DCSync attack (alternatively, they can use NTDS.dit and LSASS process dumps on the Domain Controller).
+- With the KRBTGT hash, attacker forges a TGT for an arbitrary user account, assigning it domain administrator privileges
+- Attacker injects the forged TGT in the same manner as a Pass-the-Ticket attack
+
+Golden Ticket Detection Opportunities
+- Hard to detect, TGT can be forged offline by an attacker, no trace of Mimikatz execution
+- Monitor common methods of extracting the KRBTGT hash:
+  - DCSync attack
+  - NTDS.dit file access
+  - LSASS memory read on the domain controller (Sysmon Event ID 10)
+
+Detecting Golden Tickets With Splunk (Yet Another Ticket To Be Passed Approach)
+- index=main earliest=1690451977 latest=1690452262 source="WinEventLog:Security" user!=*$ EventCode IN (4768,4769,4770) | rex field=user "(?<username>[^@]+)" | rex field=src_ip "(\:\:ffff\:)?(?<src_ip_4>[0-9\.]+)" | transaction username, src_ip_4 maxspan=10h keepevicted=true startswith=(EventCode=4768) | where closed_txn=0 | search NOT user="*$@*" | table _time, ComputerName, username, src_ip_4, service_name, category
+
+Silver Ticket
+- Attacker has the password hash of a target service account (e.g., SharePoint, MSSQL) may forge Kerberos TGS. This is Silver Ticket
+- Can impersonate any user, but only allows attacker to access a specific resource (e.g., MSSQL) and the system hosting the resource
+
+Attack Steps
+- Attacker extracts the NTLM hash of the targeted service account (or the computer account for CIFS access) using tools like Mimikatz or other credential dumping techniques
+- Generate a Silver Ticket using the extracted NTLM hash
+  - Use tools like Mimikatz to create a forged TGS ticket for the specified service.
+- The attacker injects the forged TGT in the same manner as a Pass-the-Ticket attack.
+
+Silver Ticket Detection Opportunities
+- Hard to detect, no simple indicators of attack
+  - Both Golden and Silver Ticket attacks, any user can be used, including non-existent ones
+    - Event ID 4720 (A user account was created) can help identify newly created users.
+- No validation for user permissions
+  - Event ID 4672 (Special Logon) can be employed to detect anomalously assigned privileges
+
+Detecting Silver Tickets With Splunk
+- Detecting Silver Tickets With Splunk Through User Correlation
+  - index=main latest=1690545656 EventCode=4624 | stats min(_time) as firstTime, values(ComputerName) as ComputerName, values(EventCode) as EventCode by user | eval last24h = 1690451977 | where firstTime > last24h ```| eval last24h=relative_time(now(),"-24h@h")``` | convert ctime(firstTime) | convert ctime(last24h) | lookup users.csv user as user OUTPUT EventCode as Events | where isnull(Events)
+  - Breakdown:
+    - index=main latest=1690545656 EventCode=4624:
+      - Searches in the main index.
+      - Limits to events with EventCode=4624 (successful logons).
+      - Only includes events before timestamp 1690545656.
+    - | stats min(_time) as firstTime, values(ComputerName) as ComputerName, values(EventCode) as EventCode by user:
+      - Finds the earliest logon time (firstTime) per user.
+      - Collects associated ComputerName and EventCode values.
+    - eval last24h = 1690451977:
+      - Sets a static time threshold for filtering recent logins.
+    - where firstTime > last24h:
+      - Keeps only users whose first login occurred after the time threshold.
+      - Converts firstTime and last24h from epoch to readable timestamps.
+    - eval last24h=relative_time(now(),"-24h@h"):
+      - (Commented out) — would dynamically set last24h to 24 hours ago.
+    - | convert ctime(firstTime):
+      - Converts the firstTime field from epoch time to a human-readable format.
+    - | convert ctime(last24h):
+      - Converts the last24h field from epoch time to a human-readable format.
+    - lookup users.csv user as user OUTPUT EventCode as Events:
+      - Compares users found in the log against those listed in users.csv.
+    - where isnull(Events):
+      - Keeps only users not found in the lookup file — i.e., potentially new or unauthorized accounts.
+- Detecting Silver Tickets With Splunk By Targeting Special Privileges Assigned To New Logon
+  - index=main latest=1690545656 EventCode=4672 | stats min(_time) as firstTime, values(ComputerName) as ComputerName by Account_Name | eval last24h = 1690451977 ```| eval last24h=relative_time(now(),"-24h@h") ``` | where firstTime > last24h | table firstTime, ComputerName, Account_Name | convert ctime(firstTime)
+
+### Walkthrough
+Q1. For which "service" did the user named Barbi generate a silver ticket?
