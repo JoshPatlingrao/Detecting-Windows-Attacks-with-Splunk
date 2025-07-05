@@ -554,3 +554,120 @@ Q1. For which "service" did the user named Barbi generate a silver ticket?
 - Focus on the entry with Event ID 4648 - A logon was attempted using explicit credentials.
   - This shows that JERRI_BALLARD was using Barbi's TGS to access CIFS service in the SQLServer
 - Answer is: CIFS
+
+## Detecting Unconstrained Delegation/Constrained Delegation Attacks
+### Notes
+Unconstrained Delegation
+- A privilege that can be granted to User or Computer Accounts in an AD environment, allowing a service to authenticate to another resource on behalf of any user
+
+Attack Steps
+- Attacker identifies systems on which Unconstrained Delegation is enabled for service accounts.
+- Attacker gains access to a system with Unconstrained Delegation enabled.
+- Attacker extracts TGT tickets from the memory of the compromised system using tools such as Mimikatz.
+
+Kerberos Authentication With Unconstrained Delegation
+- In Kerberos Authentication, when a user requests a TGS ticket for a remote service, the Domain Controller will embed the user's TGT into the service ticket
+  - When connecting to the remote service, the user will present not only the TGS ticket but also their own TGT
+- When the service needs to authenticate to another service on behalf of the user, it will present the user's TGT ticket, which the service received with the TGS ticket.
+
+Unconstrained Delegation Attack Detection Opportunities
+- PowerShell commands and LDAP search filters used for Unconstrained Delegation discovery can be detected by monitoring PowerShell script block logging (Event ID 4104) and LDAP request logging
+- Main goal of an Unconstrained Delegation attack is to retrieve and reuse TGT tickets, so Pass-the-Ticket detection can be used as well.
+
+Detecting Unconstrained Delegation Attacks With Splunk
+- index=main earliest=1690544538 latest=1690544540 source="WinEventLog:Microsoft-Windows-PowerShell/Operational" EventCode=4104 Message="*TrustedForDelegation*" OR Message="*userAccountControl:1.2.840.113556.1.4.803:=524288*" | table _time, ComputerName, EventCode, Message
+
+Constrained Delegation
+- A feature in AD that allows services to delegate user credentials only to specified resources, reducing the risk associated with Unconstrained Delegation
+- Any user or computer accounts that have service principal names (SPNs) set in their msDS-AllowedToDelegateTo property can impersonate any user in the domain to those specific SPNs.
+
+Attack Steps
+- Attacker identifies systems where Constrained Delegation is enabled and determines the resources to which they are allowed to delegate
+- Attacker gains access to the TGT of the principal (user or computer). The TGT can be extracted from memory (Rubeus dump) or requested with the principal's hash
+- Attacker uses the S4U technique to impersonate a high-privileged account to the targeted service (requesting a TGS ticket)
+- Attacker injects the requested ticket and accesses targeted services as the impersonated user.
+
+Kerberos Protocol Extensions - Service For User
+- Service for User to Self (S4U2self) and Service for User to Proxy (S4U2proxy) allow a service to request a ticket from the KDC on behalf of a user
+  - S4U2self allows a service to obtain a TGS for itself on behalf of a user
+    - Designed to enable a user to request a TGS ticket when another method of authentication was used instead of Kerberos
+    - This TGS ticket can be requested on behalf of any use
+  - S4U2proxy allows the service to obtain a TGS on behalf of a user for a second service
+    - Designed to take a forwardable ticket and use it to request a TGS ticket to any SPN specified in the msds-allowedtodelegateto options for the user specified in the S4U2self part
+- With S4U2self and S4U2proxy, an attacker can impersonate any user to service principal names (SPNs) set in msDS-AllowedToDelegateTo properties
+
+Constrained Delegation Attack Detection Opportunities
+- Possible to detect PowerShell commands and LDAP requests aimed at discovering vulnerable Constrained Delegation users and computers
+- To request a TGT ticket for a principal, as well as a TGS ticket using the S4U technique, Rubeus makes connections to the Domain Controller
+  - Can be detected as an unusual process network connection to TCP/UDP port 88 (Kerberos).
+
+Detecting Constrained Delegation Attacks With Splunk
+- index=main earliest=1690544553 latest=1690562556 source="WinEventLog:Microsoft-Windows-PowerShell/Operational" EventCode=4104 Message="*msDS-AllowedToDelegateTo*" | table _time, ComputerName, EventCode, Message
+
+Detecting Constrained Delegation Attacks - Leveraging Sysmon Logs
+- index=main earliest=1690562367 latest=1690562556 source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" | eventstats values(process) as process by process_id | where EventCode=3 AND dest_port=88 | table _time, Computer, dest_ip, dest_port, Image, process
+
+### Walkthrough
+Q1. Employ the Splunk search provided at the "Detecting Unconstrained Delegation Attacks With Splunk" part of this section on all ingested data (All time). Enter the name of the other computer on which there are traces of reconnaissance related to Unconstrained Delegation as your answer. Answer format: _.corp.local
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Run the specified query and modify it to remove the time range to scan all events
+- Answer is: DC01.corp.local
+
+## Detecting DCSync/DCShadow
+### Notes
+DCSync
+- A technique used by attackers to extract password hashes from Active Directory Domain Controllers (DCs).
+- It exploits the "Replication Directory Changes" permission, which allows reading all object attributes — including password hashes.
+- The following accounts can perform DCSync by default: Admins, Domain Admins, Enterprise Admins, Computer accounts of Domain Controllers
+- DCSync can retrieve:
+  - Current and historical password hashes
+  - Especially sensitive accounts like:
+    - KRBTGT (used for Kerberos ticket encryption)
+    - Administrator accounts
+- Attacker wants to gain persistent access and perform pass-the-hash or Golden Ticket attacks
+
+Attack Steps
+- Attacker secures admin access to a domain-joined system or escalates privileges to acquire the requisite rights to request replication data.
+- Use tools such as Mimikatz, attacker requests domain replication data by using the DRSGetNCChanges interface, and mimic a legitimate domain controller.
+- Attacker may then craft Golden Tickets, Silver Tickets, or opt to employ Pass-the-Hash/Overpass-the-Hash attacks.
+
+DCSync Detection Opportunities
+- DS-Replication-Get-Changes operations can be recorded with Event ID 4662.
+  - Additional Audit Policy Configuration is needed, not enabled by default (Computer Configuration/Windows Settings/Security Settings/Advanced Audit Policy Configuration/DS Access)
+- Find events with the property {1131f6aa-9c07-11d1-f79f-00c04fc2dcd2}, corresponding to DS-Replication-Get-Changes, as Event 4662 solely consists of GUIDs.
+
+Detecting DCSync With Splunk
+- index=main earliest=1690544278 latest=1690544280 EventCode=4662 Message="*Replicating Directory Changes*" | rex field=Message "(?P<property>Replicating Directory Changes.*)" | table _time, user, object_file_name, Object_Server, property
+
+DCShadow
+- An advanced technique used to stealthily modify AD objects without triggering typical security logs.
+- It exploits the Directory Replicator permission (i.e., Replicating Directory Changes), which is normally assigned to Domain Controllers for replication purposes.
+- Attackers use DCShadow to:
+  - Create or alter AD objects (e.g., accounts, groups, permissions)
+  - Bypass standard detection and logging
+  - Establish persistence within the network
+- To register a rogue Domain Controller (used in the attack), the attacker must:
+  - Create new server and nTDSDSA objects in the Configuration partition of AD
+  - This action requires Administrator privileges:
+    - Either Domain Admin, Local Admin on the DC, or access to the KRBTGT hash
+-Purpose for attackers:
+  - Inject backdoors or elevate privileges
+  - Operate under the radar of traditional monitoring tools
+
+Attack Steps
+- Attacker gains administrative access to a domain-joined system or escalates privileges to acquire the necessary rights to request replication data.
+- Attacker registers a rogue domain controller within the domain, leveraging the Directory Replicator permission, and executes changes to AD objects, such as modifying user groups to Domain Administrator groups
+- The compromised domain controller initiates replication with the legitimate domain controllers, disseminating the changes throughout the domain
+
+DCShadow Detection Opportunities
+- To emulate a Domain Controller, DCShadow must implement specific modifications in Active Directory:
+  - Add a new nTDSDSA object
+  - Append a global catalog ServicePrincipalName to the computer object
+- Event ID 4742 (Computer account was changed) logs changes related to computer objects, including ServicePrincipalName.
+
+Detecting DCShadow With Splunk
+- index=main earliest=1690623888 latest=1690623890 EventCode=4742 | rex field=Message "(?P<gcspn>XX\/[a-zA-Z0-9\.\-\/]+)" | table _time, ComputerName, Security_ID, Account_Name, user, gcspn | search gcspn=*
+
+### Walkthrough
+Q1. Modify the last Splunk search in this section by replacing the two hidden characters (XX) to align the results with those shown in the screenshot. Enter the correct characters as your answer.
