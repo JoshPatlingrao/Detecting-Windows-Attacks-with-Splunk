@@ -542,3 +542,15 @@ Detecting Silver Tickets With Splunk
 
 ### Walkthrough
 Q1. For which "service" did the user named Barbi generate a silver ticket?
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - http://IPADDRESS:8000
+- Run the Splunk query to create a list of users, using Event ID 4720
+  - index=main latest=1690448444 EventCode=4720 | stats min(_time) as _time, values(EventCode) as EventCode by user | outputlookup users.csv
+    - This will generate the 'users.csv' file which will be used as lookup for the next query
+- Run this query to compare the compare the list of users to the logged in users within the specified timeframe
+  - index=main latest=1690545656 EventCode=4624 | stats min(_time) as firstTime, values(ComputerName) as ComputerName, values(EventCode) as EventCode by user | eval last24h = 1690451977 | where firstTime > last24h | convert ctime(firstTime) | convert ctime(last24h) | lookup users.csv user as user OUTPUT EventCode as Events | where isnull(Events)
+- Select the single entry for 'Barbi' and modify the query
+  - Change the 'EventCode=4624' to 'EventCode!=4624' to lookup other events related to this account
+- Focus on the entry with Event ID 4648 - A logon was attempted using explicit credentials.
+  - This shows that JERRI_BALLARD was using Barbi's TGS to access CIFS service in the SQLServer
+- Answer is: CIFS
