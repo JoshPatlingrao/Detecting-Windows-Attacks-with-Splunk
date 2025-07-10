@@ -671,3 +671,21 @@ Detecting DCShadow With Splunk
 
 ### Walkthrough
 Q1. Modify the last Splunk search in this section by replacing the two hidden characters (XX) to align the results with those shown in the screenshot. Enter the correct characters as your answer.
+
+
+## Detecting RDP Brute Force Attacks
+### Notes
+RDP Brute Force Attack
+- A common vector for attackers to gain initial foothold in a network
+- Attackers try to login into a Remote Desktop session by guessing and trying different passwords until they find the correct one.
+- Many users often have weak or default passwords that are easy to guess
+
+Detecting RDP Brute Force Attacks With Splunk & Zeek Logs
+- index="rdp_bruteforce" sourcetype="bro:rdp:json" | bin _time span=5m | stats count values(cookie) by _time, id.orig_h, id.resp_h | where count>30
+
+### Walkthrough
+Q1. Construct a Splunk query targeting the "ssh_bruteforce" index and the "bro:ssh:json" sourcetype. The resulting output should display the time bucket, source IP, destination IP, client, and server, together with the cumulative count of authentication attempts where the total number of attempts surpasses 30 within a 5-minute time window. Enter the IP of the client that performed the SSH brute attack as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run the specified query
+- Answer is: 192.168.152.140
