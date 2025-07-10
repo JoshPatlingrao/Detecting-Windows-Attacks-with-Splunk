@@ -689,3 +689,49 @@ Q1. Construct a Splunk query targeting the "ssh_bruteforce" index and the "bro:s
   - https://IPADDRESS:8000
 - Run the specified query
 - Answer is: 192.168.152.140
+
+## Detecting Beaconing Malware
+### Notes
+Malware Beaconing
+- Another common technique
+- Refers to the periodic communication initiated by malware-infected systems with their respective command and control (C2) servers
+- Beacons, typically small data packets, are sent at regular intervals
+  - Intervals can be fixed, jittered (varied slightly from a fixed pattern), or follow a more complex schedule based on the malware's specific objectives
+  - Can use various protocols such as HTTP/HTTPS, DNS, and even ICMP
+- This section focuses on Cobalt Strike
+
+Detecting Beaconing Malware With Splunk & Zeek Logs
+- index="cobaltstrike_beacon" sourcetype="bro:http:json" | sort 0 _time | streamstats current=f last(_time) as prevtime by src, dest, dest_port | eval timedelta = _time - prevtime | eventstats avg(timedelta) as avg, count as total by src, dest, dest_port | eval upper=avg*1.1 | eval lower=avg*0.9 | where timedelta > lower AND timedelta < upper | stats count, values(avg) as TimeInterval by src, dest, dest_port, total | eval prcnt = (count/total)*100 | where prcnt > 90 AND total > 10
+- Breakdown
+  - index="cobaltstrike_beacon" sourcetype="bro:http:json"
+    - Selects Zeek HTTP log events from the cobaltstrike_beacon index.
+  - | sort 0 _time
+    - Sorts events chronologically.
+  - | streamstats current=f last(_time) as prevtime by src, dest, dest_port
+    - Assigns the previous event's timestamp (prevtime) for each src, dest, and dest_port combination.
+  - | eval timedelta = _time - prevtime
+    - Computes the time between current and previous events.
+  - | eventstats avg(timedelta) as avg, count as total by src, dest, dest_port
+    - Calculates the average time difference (avg) and total number of events (total) per group.
+  - | eval upper=avg*1.1 and | eval lower=avg*0.9
+    - Create a ±10% range around the average interval.
+  - | where timedelta > lower AND timedelta < upper
+    - Keeps events with intervals close to the average.
+  - | stats count, values(avg) as TimeInterval by src, dest, dest_port, total
+    - Counts events within the time window and shows the average interval.
+  - | eval prcnt = (count/total)*100
+    - Computes what percentage of events fell into the expected time range.
+  - | where prcnt > 90 AND total > 10
+    - Keeps only those source-destination-port groups with over 90% regular timing and more than 10 events — indicating likely beaconing activity.
+
+### Walkthrough
+Q1. Use the "cobaltstrike_beacon" index and the "bro:http:json" sourcetype. What is the most straightforward Splunk command to pinpoint beaconing from the 10.0.10.20 source to the 192.168.151.181 destination? Answer format: One word
+- Answer is: timechart
+  - 'timechart' is used to:
+    - Analyze how events change over time
+    - Visualize patterns and trends
+    - Detect regular or abnormal behavior, like beaconing, traffic bursts, or downtime
+  - Used for:
+    - Counting events over time (e.g., HTTP requests per minute)
+    - Calculating averages, sums, or other metrics over time
+    - Detecting periodic patterns, which is key for beaconing
