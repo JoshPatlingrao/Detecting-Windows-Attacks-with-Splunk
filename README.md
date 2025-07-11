@@ -988,3 +988,45 @@ Q1. Use the "dns_exf" index and the "bro:dns:json" sourcetype. Enter the attacke
   - index=dns_exf sourcetype="bro:dns:json" | eval len_query=len(query) | search len_query>=40 AND query!="*.ip6.arpa*" AND query!="*amazonaws.com*" AND query!="*._googlecast.*" AND query!="_ldap.*" | bin _time span=24h | stats count(query) as req_by_day by _time, id.orig_h, id.resp_h, query
     - There will be countless of entries, due to the randomly generated numbers for multiple subdomains, but the attakcer domain should be the same throughout the query field
 - Answer is: letsgohunt.online
+
+## Detecting Ransomware
+### Notes
+Ransomware
+- Ransomware often uses file overwrite or file renaming techniques via the SMB protocol to encrypt and lock victim files. Both methods have unique behavioral indicators that can be detected through network and file activity monitoring.
+
+File Overwrite Approach
+- How?
+  - Ransomware accesses files over SMB (Server Message Block).
+  - Encrypts them in memory and overwrites the original files directly.
+- Why?
+  - Faster and stealthier – leaves fewer traces and file remnants.
+- Detection
+  - Look for unusual or excessive file overwrite operations.
+  - Monitor SMB traffic for high volumes of write operations without corresponding file renames.
+
+File Renaming Approach
+- How?
+  - Ransomware reads files via SMB, encrypts them, and saves them with a new name.
+  - Often appends a unique extension indicating the ransomware strain (e.g., .locky, .conti).
+- Why?
+  - Clear signal that files are encrypted and held hostage.
+  - Makes it easier to intimidate victims and signal the presence of ransomware.
+- Detection
+  - Monitor for a sudden spike in file renames.
+  - Flag cases where many files are renamed with the same unusual extension.
+
+Detecting Ransomware With Splunk & Zeek Logs (Excessive Overwriting)
+- index="ransomware_open_rename_sodinokibi" sourcetype="bro:smb_files:json" | where action IN ("SMB::FILE_OPEN", "SMB::FILE_RENAME") | bin _time span=5m | stats count by _time, source, action | where count>30 | stats sum(count) as count values(action) dc(action) as uniq_actions by _time, source | where uniq_actions==2 AND count>100
+
+Detecting Ransomware With Splunk & Zeek Logs (Excessive Renaming With The Same Extension)
+- index="ransomware_new_file_extension_ctbl_ocker" sourcetype="bro:smb_files:json" action="SMB::FILE_RENAME" | bin _time span=5m | rex field="name" "\.(?<new_file_name_extension>[^\.]*$)" | rex field="prev_name" "\.(?<old_file_name_extension>[^\.]*$)" | stats count by _time, id.orig_h, id.resp_p, name, source, old_file_name_extension, new_file_name_extension, | where new_file_name_extension!=old_file_name_extension | stats count by _time, id.orig_h, id.resp_p, source, new_file_name_extension | where count>20 | sort -count
+- Breakdown
+
+### Walkthrough
+Q1. Modify the action-related part of the Splunk search of this section that detects excessive file overwrites so that it detects ransomware that delete the original files instead of overwriting them. Run this search against the "ransomware_excessive_delete_aleta" index and the "bro:smb_files:json" sourcetype. Enter the value of the "count" field as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Modify the Excessive Overwriting query and run it
+  - index="ransomware_excessive_delete_aleta" sourcetype="bro:smb_files:json" | where action IN ("SMB::FILE_OPEN", "SMB::FILE_DELETE") | bin _time span=5m | stats count by _time, source, action | where count>30 | stats sum(count) as count values(action) dc(action) as uniq_actions by _time, source
+    - Rather than FILE_OPEN & FILE_RENAME it's now FILE_OPEN AND FILE_DELETE
+- Answer is: 4588
