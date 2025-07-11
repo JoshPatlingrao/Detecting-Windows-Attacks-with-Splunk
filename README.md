@@ -859,3 +859,63 @@ Q1. What port does the attacker use for communication during the Golden Ticket a
   - index="golden_ticket_attack" sourcetype="bro:kerberos:json" id.resp_h=192.168.38.102 | where client!="-" | where request_type="TGS"
     - THis query shows that attacker is using port 88
 - Answer is: 88
+
+## Detecting Cobalt Strike's PSExec
+### Notes
+Cobalt Strike's PSExec
+- An implementation of the PsExec tool, a part of Microsoft's Sysinternals Suite.
+- A lightweight telnet-replacement that lets you execute processes on other systems
+  - Executes payloads on remote systems, as part of the post-exploitation process
+- Cobalt Strike's psexec works over port 445 (SMB), and it requires local administrator privileges on the target system
+  - Used after initial access and privilege escalation has been done
+
+How?
+- Service Creation
+  - A new Windows service is created on the target machine.
+  - The service name is usually randomized to evade detection.
+- File Transfer
+  - The malicious payload is copied to the target (commonly via the ADMIN$ share using SMB).
+- Service Execution
+  - The attacker starts the service, which executes the payload (e.g., shellcode or executable).
+- Service Removal
+  - After execution, the service is stopped and deleted to reduce forensic evidence.
+- Communication
+  - If the payload is a beacon/backdoor, it connects back to the Cobalt Strike server for command-and-control (C2).
+
+Detecting Cobalt Strike's PSExec With Splunk & Zeek Logs
+- index="cobalt_strike_psexec" sourcetype="bro:smb_files:json" action="SMB::FILE_OPEN" name IN ("*.exe", "*.dll", "*.bat") path IN ("*\\c$", "*\\ADMIN$") size>0
+
+### Walkthrough
+Q1. Use the "change_service_config" index and the "bro:dce_rpc:json" sourcetype to create a Splunk search that will detect SharpNoPSExec (https://gist.github.com/defensivedepth/ae3f882efa47e20990bc562a8b052984). Enter the IP included in the "id.orig_h" field as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run this query based on the parameters
+  - index="change_service_config" sourcetype="bro:dce_rpc:json" endpoint=svcctl | search operation="ChangeServiceConfigW" OR operation="StartServiceA" | table _time, src_ip, dest_ip, operation, named_pipe
+    - The 'endpoint' is as specified on the reference link
+    - The operation, as shown on the link, could be either 'ChangeServiceConfigW' or 'StartServiceA'
+- Answer is: 192.168.38.104
+
+## Detecting Zerologon
+### Notes
+Zerologon
+- A.K.A. CVE-2020-1472, a critical flaw in the implementation of Netlogon Remote Protocol, specifically the cryptographic algorithm of the protocol
+- Attacker can impersonate any computer, including the domain controller, and execute remote procedure calls on their behalf
+- Protocol Flaw: Zerologon exploits a cryptographic flaw in MS-NRPC (Netlogon Remote Protocol) used for machine authentication in Windows domains.
+- AES-CFB8 IV Misuse: The protocol uses AES-CFB8 encryption with a flawed implementation — the initialization vector (IV) is set to all zeros instead of being random.
+- Session Key Exploit: An attacker can send authentication attempts with a zeroed session key, which the domain controller may incorrectly accept due to the IV flaw.
+- Bypassing Authentication: The attacker can successfully authenticate without knowing the machine account’s password.
+- Privilege Escalation: Once authenticated, the attacker uses the NetrServerPasswordSet2 function to change the domain controller’s machine password — potentially to a blank value.
+- Full Domain Control: This gives the attacker complete control over the domain controller and the entire Active Directory domain.
+- Speed & Simplicity: The attack is fast, requires no special credentials, and can be executed with just a few Netlogon messages in seconds.
+
+Detecting Zerologon With Splunk & Zeek Logs
+- index="zerologon" endpoint="netlogon" sourcetype="bro:dce_rpc:json" | bin _time span=1m | where operation == "NetrServerReqChallenge" OR operation == "NetrServerAuthenticate3" OR operation == "NetrServerPasswordSet2" | stats count values(operation) as operation_values dc(operation) as unique_operations by _time, id.orig_h, id.resp_h | where unique_operations >= 2 AND count>100
+
+### Walkthrough
+Q1. In a Zerologon attack, the primary port of communication for the attacker is port 88. Answer format: True, False.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run the modified query which includes queries for ports
+  - index="zerologon" endpoint="netlogon" sourcetype="bro:dce_rpc:json" | bin _time span=1m | where operation == "NetrServerReqChallenge" OR operation == "NetrServerAuthenticate3" OR operation == "NetrServerPasswordSet2" | stats count values(operation) as operation_values dc(operation) as unique_operations by _time, id.orig_h, id.resp_h, id.orig_p, id.resp_p
+    - There are a lot more entries. Attacker will cycle through ports to make it harder to detect. Ports are also uncommon and high value such as 56208 and 56210
+- Answer is: False
