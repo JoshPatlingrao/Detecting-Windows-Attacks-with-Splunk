@@ -819,3 +819,43 @@ Q1. What port does the attacker use for communication during the Kerberoasting a
   - index="sharphound" sourcetype="bro:kerberos:json" request_type=TGS cipher="rc4-hmac" forwardable="true" renewable="true" | stats count by client, service, id.orig_h, id.orig_p, id.resp_h, id.resp_p
     - This will show that the attacker cycles through multiple ports, but the service always reponds to the same port on attacker
 - Answer is: 88
+
+## Detecting Golden Tickets
+### Notes
+Golden Tickets
+- Zeek can't reliably identify Golden Tickets, but Splunk can
+- Attacker bypasses the usual Kerberos authentication process, involving the AS-REQ and AS-REP messages
+- Kerberos Authentication Process:
+  - Client sends an AS-REQ (Authentication Service Request) message to the KDC
+    - Specifically the Authentication Service (AS) and reqeusts for a TGT
+  - KDC responds with an AS-REP (Authentication Service Response) message, and includes the TGT if the client's credentials are valid
+  - Client uses the TGT to request service tickets (TGS) for specific services on the network
+- Golden Ticket Attack:
+  - Attacker generates a forged TGT, bypassing the authentication from KDC, and can request for TGS
+- Pass the Ticket ATtack:
+  - Attacker steals a valid TGT or TGS ticket from a legitimate user and uses that ticket to access network resources. KDS authentication bypassed.
+
+Detecting Golden Tickets With Splunk & Zeek Logs
+- index="golden_ticket_attack" sourcetype="bro:kerberos:json" | where client!="-" | bin _time span=1m | stats values(client), values(request_type) as request_types, dc(request_type) as unique_request_types by _time, id.orig_h, id.resp_h | where request_types=="TGS" AND unique_request_types==1
+- Breakdown
+  - index="golden_ticket_attack" sourcetype="bro:kerberos:json"
+    - Searches for Kerberos-related events in the specified index and format.
+  - | where client!="-"
+    - Filters out events where the client field is missing or undefined to reduce noise.
+  - | bin _time span=1m
+    - Groups events into 1-minute intervals for time-based analysis.
+  - | stats values(client), values(request_type) as request_types, dc(request_type) as unique_request_types by _time, id.orig_h, id.resp_h
+    - Groups data by time, source IP (id.orig_h), and destination IP (id.resp_h)
+    - Lists all unique clients and request types in that time window
+    - Counts distinct request types per grouping
+  - | where request_types=="TGS" AND unique_request_types==1
+    - Filters to show only events where TGS is the only request type, which may indicate forged ticket usage (a sign of Golden Ticket attacks).
+
+### Walkthrough
+Q1. What port does the attacker use for communication during the Golden Ticket attack?
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run this modified query
+  - index="golden_ticket_attack" sourcetype="bro:kerberos:json" id.resp_h=192.168.38.102 | where client!="-" | where request_type="TGS"
+    - THis query shows that attacker is using port 88
+- Answer is: 88
