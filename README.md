@@ -730,8 +730,50 @@ Q1. Use the "cobaltstrike_beacon" index and the "bro:http:json" sourcetype. What
   - 'timechart' is used to:
     - Analyze how events change over time
     - Visualize patterns and trends
+      - Good for Beaconing which usually transmits 'beacons' consistently over time
     - Detect regular or abnormal behavior, like beaconing, traffic bursts, or downtime
   - Used for:
     - Counting events over time (e.g., HTTP requests per minute)
+      - Can count events within 'buckets' or time intervals
     - Calculating averages, sums, or other metrics over time
     - Detecting periodic patterns, which is key for beaconing
+      - Can bucket events into specified time intervals, using 'span=1m', in this case every 1 min
+
+## Detecting Nmap Port Scanning
+### Notes
+Nmap Port Scanning
+- A key technique in the toolkit of attackers and penetration testers alike.
+- Probes networked systems for open ports - these are 'gates' through which data passes in and out of a system
+  - Open ports are like doors in a building, can be used as possible attack vector
+
+How?
+- Nmap port scanning initiates a series of connection requests
+  - Attempts to establish a TCP handshake with each port in the target's address space
+    - If successful, it means the port is open
+- When connection to open port is established, the service listening on that port might send back a "banner" - a little bit of data that tells us what service is running, and maybe even what version it's running
+- NMap doesn't send any real data, payload is 0
+
+Detecting Nmap Port Scanning With Splunk & Zeek Logs
+- index="cobaltstrike_beacon" sourcetype="bro:conn:json" orig_bytes=0 dest_ip IN (192.168.0.0/16, 172.16.0.0/12, 10.0.0.0/8) | bin span=5m _time | stats dc(dest_port) as num_dest_port by _time, src_ip, dest_ip | where num_dest_port >= 3
+- Breakdown:
+  - index="cobaltstrike_beacon"
+    - Limits the search to events in the cobaltstrike_beacon index.
+  - orig_bytes=0
+    - Filters for events where no original bytes were sent — possibly indicating scanning or failed connection attempts.
+  - dest_ip IN (192.168.0.0/16, 172.16.0.0/12, 10.0.0.0/8)
+    - Focuses only on events targeting private/internal IP ranges.
+  - | bin span=5m _time
+    - Groups events into 5-minute time buckets to analyze activity over short intervals.
+  - | stats dc(dest_port) as num_dest_port by _time, src_ip, dest_ip
+    - Calculates the number of distinct destination ports contacted by each source IP to each destination IP per 5-minute interval.
+  - | where num_dest_port >= 3
+    - Filters to show only events where 3 or more distinct ports were accessed — a possible sign of port scanning activity.
+
+### Walkthrough
+Q1. Use the "cobaltstrike_beacon" index and the "bro:conn:json" sourcetype. Did the attacker scan port 505? Answer format: Yes, No
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run this query and it should confirm the NMap traffic to port 505
+  - index="cobaltstrike_beacon" sourcetype="bro:conn:json" orig_bytes=0 dest_port=505 | bin span=5m _time | stats count by src_ip, dest_ip, dest_port
+    - Modify the query to look for NMap traffic to port 505
+- Answer is: Yes
