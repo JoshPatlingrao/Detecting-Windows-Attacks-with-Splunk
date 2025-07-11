@@ -777,3 +777,26 @@ Q1. Use the "cobaltstrike_beacon" index and the "bro:conn:json" sourcetype. Did 
   - index="cobaltstrike_beacon" sourcetype="bro:conn:json" orig_bytes=0 dest_port=505 | bin span=5m _time | stats count by src_ip, dest_ip, dest_port
     - Modify the query to look for NMap traffic to port 505
 - Answer is: Yes
+
+## Detecting Kerberos Brute Force Attacks
+### Notes
+Kerberos-Based User Enumeration
+- Sends an AS-REQ (Authentication Service Request) message to the KDC, which is responsible for handling Kerberos authentication
+  - Message includes the username attacker is trying to validate
+  - The response reveals valuable information about the existence of the specified user account
+- If:
+  - Username is valid, it will prompt the server to return a TGT or raise an error like KRB5KDC_ERR_PREAUTH_REQUIRED, meaning preauthentication is required
+  - Username is invalid, will be met with a Kerberos error code KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN in the AS-REP (Authentication Service Response) message
+
+Detecting Kerberos Brute Force Attacks With Splunk & Zeek Logs
+- index="kerberos_bruteforce" sourcetype="bro:kerberos:json" error_msg!=KDC_ERR_PREAUTH_REQUIRED success="false" request_type=AS | bin _time span=5m | stats count dc(client) as "Unique users" values(error_msg) as "Error messages" by _time, id.orig_h, id.resp_h | where count>30
+
+### Walkthrough
+Q1. Use the "kerberos_bruteforce" index and the "bro:kerberos:json" sourcetype. Was the "accrescent/windomain.local" account part of the Kerberos user enumeration attack? Answer format: Yes, No
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run this query, as there's only 1 event
+  - index="kerberos_bruteforce" sourcetype="bro:kerberos:json" error_msg="KDC_ERR_C_PRINCIPAL_UNKNOWN" client="accrescent/windomain.local"
+    - Confirms that "accrescent/windomain.local" is part of the attack
+    - Error message confirms that KDC doesn't recognize the account - the account doesn't exist
+- Answer is: Yes
