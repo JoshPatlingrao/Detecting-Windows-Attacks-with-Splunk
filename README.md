@@ -919,3 +919,72 @@ Q1. In a Zerologon attack, the primary port of communication for the attacker is
   - index="zerologon" endpoint="netlogon" sourcetype="bro:dce_rpc:json" | bin _time span=1m | where operation == "NetrServerReqChallenge" OR operation == "NetrServerAuthenticate3" OR operation == "NetrServerPasswordSet2" | stats count values(operation) as operation_values dc(operation) as unique_operations by _time, id.orig_h, id.resp_h, id.orig_p, id.resp_p
     - There are a lot more entries. Attacker will cycle through ports to make it harder to detect. Ports are also uncommon and high value such as 56208 and 56210
 - Answer is: False
+
+
+## Detecting Exfiltration (HTTP)
+### Notes
+Exfiltration (HTTP)
+- Attackers exfiltrate sensitive data by hiding it in the body of HTTP POST requests, malicious activity hidden in normal web traffic
+- Method:
+  - Data is hidden in the POST body of HTTP requests.
+  - Sent from the compromised system to an attacker-controlled C2 server.
+  - Mimics normal behavior like form submissions or file uploads.
+- Evasion Techniques:
+  - Attackers use normal-looking URLs and headers.
+  - This disguises the traffic to evade detection by traditional monitoring tools.
+- C2 Servers:
+  - Receives POST requests.
+  - Extracts, decodes, or decrypts the embedded stolen data.
+- Detection:
+  - Monitor outgoing HTTP POST traffic, especially to unusual IPs or ports.
+  - Look for anomalies in data volume and frequency of POST requests.
+  - Aggregate and analyze traffic to detect patterns suggesting exfiltration.
+- IoCs:
+  - Unusual data transfer sizes in POST bodies.
+  - Frequent outbound POSTs to unfamiliar destinations.
+
+Detecting HTTP Exfiltration With Splunk & Zeek Logs
+- index="cobaltstrike_exfiltration_http" sourcetype="bro:http:json" method=POST | stats sum(request_body_len) as TotalBytes by src, dest, dest_port | eval TotalBytes = TotalBytes/1024/1024
+
+### Walkthrough
+Q1. Use the "cobaltstrike_exfiltration_https" index and the "bro:conn:json" sourcetype. Create a Splunk search to identify exfiltration through HTTPS. Enter the identified destination IP as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run the modified query
+  - index="cobaltstrike_exfiltration_http" sourcetype="bro:http:json" method=POST | stats sum(request_body_len) as TotalBytes by src, dest, dest_port
+- Answer is: 192.168.151.181
+
+## Detecting Exfiltration (DNS)
+### Notes
+Exfiltration (DNS)
+- A covert method used by attackers to extract data from a network by encoding it into DNS queries
+- DNS traffic is usually allowed and overlooked by security systems
+
+How?
+- Initial Compromise:
+  - The attacker gains access to the network via malware, phishing, or exploits.
+- Data Identification & Preparation:
+  - Sensitive data is encoded/encrypted and split into small chunks.
+- Exfiltration via DNS Queries
+  - The attacker embeds data in the subdomain fields of DNS requests.
+  - Requests are sent to a malicious or compromised domain controlled by the attacker.
+  - The attacker's DNS server collects and reassembles the data.
+- Data Retrieval & Analysis
+  - On the attacker’s side, the data is decoded/decrypted and analyzed.
+
+Detection
+- Monitor for unusually long subdomain strings in DNS queries.
+- Look for frequent outbound DNS requests to rare or unknown domains.
+- Use DNS traffic analysis tools to detect suspicious patterns or tunneling behavior.
+
+Detecting DNS Exfiltration With Splunk & Zeek Logs
+- index=dns_exf sourcetype="bro:dns:json" | eval len_query=len(query) | search len_query>=40 AND query!="*.ip6.arpa*" AND query!="*amazonaws.com*" AND query!="*._googlecast.*" AND query!="_ldap.*" | bin _time span=24h | stats count(query) as req_by_day by _time, id.orig_h, id.resp_h | where req_by_day>60 | table _time, id.orig_h, id.resp_h, req_by_day
+
+### Walkthrough
+Q1. Use the "dns_exf" index and the "bro:dns:json" sourcetype. Enter the attacker-controlled domain as your answer. Answer format: _._
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run the modified query which shows the 'query' field for the attacker domain
+  - index=dns_exf sourcetype="bro:dns:json" | eval len_query=len(query) | search len_query>=40 AND query!="*.ip6.arpa*" AND query!="*amazonaws.com*" AND query!="*._googlecast.*" AND query!="_ldap.*" | bin _time span=24h | stats count(query) as req_by_day by _time, id.orig_h, id.resp_h, query
+    - There will be countless of entries, due to the randomly generated numbers for multiple subdomains, but the attakcer domain should be the same throughout the query field
+- Answer is: letsgohunt.online
