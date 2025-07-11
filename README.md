@@ -1031,7 +1031,7 @@ Q1. Modify the action-related part of the Splunk search of this section that det
     - Rather than FILE_OPEN & FILE_RENAME it's now FILE_OPEN AND FILE_DELETE
 - Answer is: 4588
 
-##Skill Assessment
+## Skill Assessment
 ### Walkthrough
 Q1. Use the "empire" index and the "bro:http:json" sourcetype. Identify beaconing activity by modifying the Splunk search of the "Detecting Beaconing Malware" section and enter the value of the "TimeInterval" field as your answer.
 - Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
