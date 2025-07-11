@@ -1030,3 +1030,32 @@ Q1. Modify the action-related part of the Splunk search of this section that det
   - index="ransomware_excessive_delete_aleta" sourcetype="bro:smb_files:json" | where action IN ("SMB::FILE_OPEN", "SMB::FILE_DELETE") | bin _time span=5m | stats count by _time, source, action | where count>30 | stats sum(count) as count values(action) dc(action) as uniq_actions by _time, source
     - Rather than FILE_OPEN & FILE_RENAME it's now FILE_OPEN AND FILE_DELETE
 - Answer is: 4588
+
+Skill Assessment
+### Walkthrough
+Q1. Use the "empire" index and the "bro:http:json" sourcetype. Identify beaconing activity by modifying the Splunk search of the "Detecting Beaconing Malware" section and enter the value of the "TimeInterval" field as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Modify the specified query and run it
+  - index="empire" sourcetype="bro:http:json" | sort 0 _time | streamstats current=f last(_time) as prevtime by src, dest, dest_port | eval timedelta = _time - prevtime | eventstats avg(timedelta) as avg, count as total by src, dest, dest_port | stats count, values(avg) as TimeInterval by src, dest, dest_port, total | eval prcnt = (count/total)*100 | where prcnt > 90 AND total > 10
+    - Change the index to "empire" and remove the timedelta comparisons
+- Answer is: 4.680851063829787
+
+Q2. Use the "printnightmare" index and the "bro:dce_rpc:json" sourcetype to create a Splunk search that will detect possible exploitation of the PrintNightmare vulnerability. Enter the IP included in the "id.orig_h" field as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run this query
+  - index="printnightmare" sourcetype="bro:dce_rpc:json" | stats count by id.orig_h, id.resp_h
+- Answer is: 192.168.1.149
+  - Attacker IP that caused the PrintNightmare attack
+
+Q3. Use the "bloodhound_all_no_kerberos_sign" index and the "bro:dce_rpc:json" sourcetype to create a Splunk search that will detect possible BloodHound activity (https://www.lares.com/blog/active-directory-ad-attacks-enumeration-at-the-network-layer/). Enter the IP included in the "id.orig_h" field as your answer.
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run this query
+  - index="bloodhound_all_no_kerberos_sign" sourcetype="bro:dce_rpc:json" | search operation="NetrSessionEnum" OR operation="NetrWkstaUserEnum" | stats count by operation, id.orig_h, id.resp_h
+    - The operation is narrowed down to either operation="NetrSessionEnum" and operation="NetrWkstaUserEnum".
+      - These are network RPC calls, telemetry left behind by Sharphound activity.
+      - The data captured by Bloodhound will be fed to Bloodhound
+    - SharpHound is enumerating the workstations on the domain as well as gathering session information for those workstations
+- Answer is: 192.168.109.105
