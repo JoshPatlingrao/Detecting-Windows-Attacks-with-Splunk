@@ -800,3 +800,22 @@ Q1. Use the "kerberos_bruteforce" index and the "bro:kerberos:json" sourcetype. 
     - Confirms that "accrescent/windomain.local" is part of the attack
     - Error message confirms that KDC doesn't recognize the account - the account doesn't exist
 - Answer is: Yes
+
+## Detecting Kerberoasting
+### Notes
+Kerberoasting
+- If attacker has at least 1 set of legitimate credentials, then they could retrieve the SPN tickets and attempt to break them offline
+- RC4 is utilized for ticket encryption behind the scenes.
+  - https://www.ired.team/offensive-security-experiments/active-directory-kerberos-abuse/t1208-kerberoasting
+
+Detecting Kerberoasting With Splunk & Zeek Logs
+- index="sharphound" sourcetype="bro:kerberos:json" request_type=TGS cipher="rc4-hmac" forwardable="true" renewable="true" | table _time, id.orig_h, id.resp_h, request_type, cipher, forwardable, renewable, client, service
+
+### Walkthrough
+Q1. What port does the attacker use for communication during the Kerberoasting attack?
+- Open Firefox, go to Splunk, go to 'Search' tab and run the Splunk query
+  - https://IPADDRESS:8000
+- Run this modified query
+  - index="sharphound" sourcetype="bro:kerberos:json" request_type=TGS cipher="rc4-hmac" forwardable="true" renewable="true" | stats count by client, service, id.orig_h, id.orig_p, id.resp_h, id.resp_p
+    - This will show that the attacker cycles through multiple ports, but the service always reponds to the same port on attacker
+- Answer is: 88
